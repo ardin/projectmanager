@@ -1,0 +1,398 @@
+ALOG="/usr/bin/dialog";
+
+PDIR="/var/www";
+MYSQL_HOST="127.0.0.1";
+MYSQL_USER="root";
+MYSQL_PASS="root";
+
+PROJECT_NAME="";
+PROJECT_PASS="";
+PROJECT_DOMAIN="";
+
+MAIL_REPORT="root@localhost";
+
+# configure dialog
+: ${DIALOG_OK=0}
+: ${DIALOG_CANCEL=1}
+: ${DIALOG_HELP=2}
+: ${DIALOG_EXTRA=3}
+: ${DIALOG_ITEM_HELP=4}
+: ${DIALOG_ESC=255}
+
+tempfile=`tempfile 2>/dev/null` || tempfile=/tmp/test$$
+trap "rm -f $tempfile" 0 1 2 5 15
+
+ME=`basename $0`;
+APP_VER="1.0.0";
+APP_NAME="Project manager";
+VERBOSE=0;
+
+txtrst='\e[0m'    # Text Reset
+txtred='\e[0;31m' # Red
+
+txtblk='\e[0;30m' # Black - Regular
+txtgrn='\e[0;32m' # Green
+txtylw='\e[0;33m' # Yellow
+txtblu='\e[0;34m' # Blue
+txtpur='\e[0;35m' # Purple
+txtcyn='\e[0;36m' # Cyan
+txtwht='\e[0;37m' # White
+bldblk='\e[1;30m' # Black - Bold
+bldred='\e[1;31m' # Red
+bldgrn='\e[1;32m' # Green
+bldylw='\e[1;33m' # Yellow
+bldblu='\e[1;34m' # Blue
+bldpur='\e[1;35m' # Purple
+bldcyn='\e[1;36m' # Cyan
+bldwht='\e[1;37m' # White
+unkblk='\e[4;30m' # Black - Underline
+undred='\e[4;31m' # Red
+undgrn='\e[4;32m' # Green
+undylw='\e[4;33m' # Yellow
+undblu='\e[4;34m' # Blue
+undpur='\e[4;35m' # Purple
+undcyn='\e[4;36m' # Cyan
+undwht='\e[4;37m' # White
+bakblk='\e[40m'   # Black - Background
+bakred='\e[41m'   # Red
+bakgrn='\e[42m'   # Green
+bakylw='\e[43m'   # Yellow
+bakblu='\e[44m'   # Blue
+bakpur='\e[45m'   # Purple
+bakcyn='\e[46m'   # Cyan
+bakwht='\e[47m'   # White
+
+# check dialog
+if [ ! -f ${DIALOG} ]; then
+  echo "Error: file ${DIALOG} not exists.";
+  exit 1;
+fi
+
+# check db configuration
+echo "show databases" | mysql -h"${MYSQL_HOST}" -u"${MYSQL_USER}" -p"${MYSQL_PASS}" 2>&1 > /dev/null;
+[[ $? -ne 0 ]] && exit 1;
+
+# check rvm
+[[ ! -f /etc/profile.d/rvm.sh ]] && echo "Error: no rvm configuration" && exit 1;
+source /etc/profile.d/rvm.sh;
+
+function new_domain_dir()
+{
+  $DIALOG --backtitle "New domain" --title "New domain" --clear "$@" --inputbox "Enter domain name:\n\n" 9 71 2> $tempfile # get project name
+  retval=$?
+  case $retval in
+    $DIALOG_OK)
+      PROJECT_DOMAIN=`cat $tempfile`;
+      if [ -z ${PROJECT_DOMAIN} ] ; then $DIALOG --title "Error" --clear "$@" --msgbox "Project domain can't be empty" 10 41; 
+      elif [ -d "${PDIR}/${PROJECT_DOMAIN}" ] ; then $DIALOG --title "Error" --clear "$@" --msgbox "Domain ${PROJECT_DOMAIN} already exists" 10 41; 
+      elif [ "${PROJECT_NAME}"=="test" ] ; then $DIALOG --title "Error" --clear "$@" --msgbox "Project name contain reserved rails words" 10 41;
+      # todo: validation # elif [ "${PROJECT_DOMAIN}" =~ "^[a-z0-9\-]*$" ] ; then $DIALOG --title "Error" --clear "$@" --msgbox "Project name contain not allowed special characters." 10 41;
+      fi;
+      echo "Result: `cat $tempfile`";;
+    $DIALOG_CANCEL)
+      echo "Abort."; exit 1;;
+    $DIALOG_ESC)
+      if test -s $tempfile ; then cat $tempfile; else echo "ESC pressed."; fi ;;
+  esac
+
+}
+
+
+function new_domain()
+{
+	echo $PROJECT_DOMAIN;
+	while [ -z ${PROJECT_DOMAIN} ] || [ -d "${PDIR}/${PROJECT_DOMAIN}" ] ; do 
+		new_domain_dir;
+	done
+	mkdir  "${PDIR}/${PROJECT_DOMAIN}";
+	chmod 771 "${PDIR}/${PROJECT_DOMAIN}";
+	chown "${USER}:dev" "${PDIR}/${PROJECT_DOMAIN}";
+vhost="<VirtualHost *:80>
+	ServerAdmin webmaster@localhost
+	ServerAlias	*.${PROJECT_DOMAIN}
+	VirtualDocumentRoot ${PDIR}/${PROJECT_DOMAIN}/%1/public/
+	<Directory />
+		Options FollowSymLinks
+		AllowOverride All
+	</Directory>
+</VirtualHost>";
+echo -e "${vhost}" > /tmp/${PROJECT_DOMAIN}
+
+	sel_domain;
+}
+
+function sel_domain()
+{
+	DOMAINS=();
+	for i in `ls ${PDIR}`; do 
+		DOMAINS=("${DOMAINS[@]}" "${i}" "${i}");
+	done
+	$DIALOG --clear --title "Select domain" "$@" --extra-button --extra-label "New domain"  \
+        --menu "Select domain for your project:" 19 50 12 \
+        ${DOMAINS[*]}  2> $tempfile
+	retval=$?
+	case $retval in
+	    $DIALOG_OK)
+	      PROJECT_DOMAIN=`cat $tempfile`;
+	      echo "Result: `cat $tempfile`";;
+	    $DIALOG_CANCEL)
+	      echo "Abort."; exit 1;;
+	    $DIALOG_EXTRA)
+	      echo "Disabled.";
+	      exit 1;;
+	      #new_domain;;
+	    $DIALOG_ESC)
+	      if test -s $tempfile ; then cat $tempfile; else echo "ESC pressed."; fi ;;
+	esac
+}
+
+
+function new_project_dir() # eg. project1
+{
+  $DIALOG --backtitle "New project" --title "New project" --clear "$@" --inputbox "Enter project name:\n\n" 9 71 2> $tempfile # get project name
+  retval=$?
+  case $retval in
+    $DIALOG_OK)
+      PROJECT_NAME=`cat $tempfile`;
+      if [ -z ${PROJECT_NAME} ] ; then $DIALOG --title "Error" --clear "$@" --msgbox "Project can't be empty" 10 41; 
+      elif [ -d "${PDIR}/${PROJECT_DOMAIN}/${PROJECT_NAME}" ] ; then $DIALOG --title "Error" --clear "$@" --msgbox "Project ${PROJECT_NAME} already exists" 10 41; 
+      elif [ ${#PROJECT_NAME} -gt 16 ] ; then $DIALOG --title "Error" --clear "$@" --msgbox "Project name can't be longer than 16 characters" 10 41;
+      else
+      # todo: validation # elif [ "${PROJECT_NAME}" =~ "^[a-z0-9\-]*$" ] ; then $DIALOG --title "Error" --clear "$@" --msgbox "Project name contain not allowed special characters." 10 41;
+      PROJECT_NAME="${PROJECT_NAME// /}";
+      PROJECT_NAME="${PROJECT_NAME//-/_}";
+      PROJECT_NAME="${PROJECT_NAME//./_}";
+	
+      fi;
+      echo "Result: `cat $tempfile`";;
+    $DIALOG_CANCEL)
+      echo "Abort."; exit 1;;
+    $DIALOG_ESC)
+      if test -s $tempfile ; then cat $tempfile; else echo "ESC pressed."; fi ;;
+  esac
+}
+
+function new_project()
+{
+	while [ -z ${PROJECT_NAME} ] || [ -d "${PDIR}/${PROJECT_DOMAIN}/${PROJECT_NAME}" ] || [ ${#PROJECT_NAME} -gt 16 ]; do 
+		new_project_dir;
+	done
+	mkdir "${PDIR}/${PROJECT_DOMAIN}/${PROJECT_NAME}";
+}
+
+function set_database_name()
+{
+	TRY=`mysql -h"${MYSQL_HOST}" -u"${MYSQL_USER}" -p"${MYSQL_PASS}" -e "grant all privileges on \\\`${PROJECT_NAME_DB}\\\`.* TO \\\`${PROJECT_NAME_USER}\\\`@\\\`%\\\` identified by '${PROJECT_PASS}'" 2>&1`;
+	MYSQL_GRANTS=$?;
+	if [ ${MYSQL_GRANTS} -ne 0 ] ; then
+
+		$DIALOG --title "Error" --clear "$@" \
+			--inputbox "\nYour database user is too long. \n
+Try entering new db username below:\n\n" 11 51 ${PROJECT_NAME_USER}  2> $tempfile
+		retval=$?
+		PROJECT_NAME_USER=`cat $tempfile`;
+		set_database_name;
+	fi;
+}
+
+function new_database_schema()
+{
+	PROJECT_NAME_DB="${PROJECT_NAME}_${PROJECT_DOMAIN}";
+	PROJECT_NAME_DB="${PROJECT_NAME_DB// /}";
+	PROJECT_NAME_DB="${PROJECT_NAME_DB//-/_}";
+	PROJECT_NAME_DB="${PROJECT_NAME_DB//./_}";
+	PROJECT_NAME_USER="${PROJECT_NAME_DB}";
+
+	TRY=`echo "create database ${PROJECT_NAME_DB}" | mysql -h"${MYSQL_HOST}" -u"${MYSQL_USER}" -p"${MYSQL_PASS}" 2>&1`;
+	if [ $? -ne 0 ] ; then
+		$DIALOG --title "Error" --clear "$@" --msgbox "${TRY}" 10 71;
+		exit 1;
+	fi
+
+	PROJECT_PASS=`strings /dev/urandom | grep -o '[[:alnum:]]' | head -n 8 | tr -d '\n'`;
+
+	TRY=`mysql -h"${MYSQL_HOST}" -u"${MYSQL_USER}" -p"${MYSQL_PASS}" -e "grant all privileges on \\\`${PROJECT_NAME_DB}\\\`.* TO \\\`${PROJECT_NAME_USER}\\\`@\\\`%\\\` identified by '${PROJECT_PASS}'" 2>&1`;
+	MYSQL_GRANTS=$?;	
+	while [ ${MYSQL_GRANTS} -ne 0 ] ; do
+		#$DIALOG --title "Error" --clear "$@" --msgbox "${TRY}" 10 71;
+		set_database_name;
+	done
+	echo "new db ok?";
+}
+
+function new_rvm_configuration()
+{
+	declare -a RUBIES;
+	for i in `ls /usr/local/rvm/rubies/ | grep -v default`; do 
+		RUBIES="${RUBIES} $i $i";
+	done
+
+	$DIALOG --clear --title "Select ruby" "$@" \
+        --menu "Select ruby version for your project:" 20 51 12 \
+        ${RUBIES[*]}  2> $tempfile
+	retval=$?
+	case $retval in
+	    $DIALOG_OK)
+	      PROJECT_RUBY_VERSION=`cat $tempfile`;
+	      echo "${PROJECT_RUBY_VERSION}" > "${PDIR}/${PROJECT_DOMAIN}/${PROJECT_NAME}/.ruby-version";
+	      echo "${PROJECT_NAME_DB}" > "${PDIR}/${PROJECT_DOMAIN}/${PROJECT_NAME}/.ruby-gemset";
+	      #echo "rvm use ${PROJECT_RUBY_VERSION}@${PROJECT_NAME_DB} --create" > "${PDIR}/${PROJECT_NAME}/.rvmrc";
+	      rvm use "${PROJECT_RUBY_VERSION}"
+
+	      echo -e "${txtylw}Creating gemset: ${PROJECT_NAME_DB} ..${txtrst}"
+	      rvm gemset create "${PROJECT_NAME_DB}";
+	      rvm use "${PROJECT_RUBY_VERSION}@${PROJECT_NAME_DB}";
+
+ 	      echo -e "${txtylw}Installing rails..${txtrst}";
+
+	      if [ "${PROJECT_RUBY_VERSION}" != "${PROJECT_RUBY_VERSION%ruby-1.9.2*}" ] ; then
+ 	        echo -e "${txtylw}* force i18n version 0.6.0${txtrst}";
+		gem install i18n -v 0.6.0 --no-document
+ 	        echo -e "${txtylw}* force rails version 3.1.12${txtrst}";
+		gem install rails -v 3.1.12 --no-document
+		#gem install rails -v 3.2.3 --no-document
+	      else
+	      	gem install rails --no-document
+	      fi
+
+	      # new application
+	      rails new "${PDIR}/${PROJECT_DOMAIN}/${PROJECT_NAME}"
+
+	      if [ $? -eq 0 ] ; then
+	      	echo ;
+ 	      	echo -e "${bldwht}Complete!${txtrst}";
+	      else
+	      	echo ;
+ 	      	echo -e "${bldred}Something wrong :(${txtrst}";
+		mkdir "${PDIR}/${PROJECT_DOMAIN}/${PROJECT_NAME}/public";
+		echo "${PROJECT_NAME}.${PROJECT_DOMAIN}" > "${PDIR}/${PROJECT_DOMAIN}/${PROJECT_NAME}/public/index.html";
+	      fi
+
+	      # generate .htaccess
+	      HTACCESS="RailsEnv development
+PassengerRuby /usr/local/rvm/wrappers/${PROJECT_RUBY_VERSION}@${PROJECT_NAME_DB}/ruby
+PassengerAppRoot ${PDIR}/${PROJECT_DOMAIN}/${PROJECT_NAME}";
+	      echo -e "${HTACCESS}" > "${PDIR}/${PROJECT_DOMAIN}/${PROJECT_NAME}/public/.htaccess";
+
+	      echo ;;
+	    $DIALOG_CANCEL)
+	      echo "Abort."; exit 1;;
+	    $DIALOG_ESC)
+	      if test -s $tempfile ; then cat $tempfile; else echo "ESC pressed."; fi ;;
+	esac
+}
+
+function report_project()
+{
+	PROJECT_INFO_TXT="
+  project name: ${PROJECT_NAME}
+  url:          http://${PROJECT_NAME}.${PROJECT_DOMAIN}
+  path:         ${PDIR}/${PROJECT_DOMAIN}/${PROJECT_NAME}
+  db host:      ${MYSQL_HOST}
+  db name:      ${PROJECT_NAME_DB}
+  db user:      ${PROJECT_NAME_USER}
+  db pass:      ${PROJECT_PASS}
+  ruby:         ${PROJECT_RUBY_VERSION}
+  gemset:       ${PROJECT_NAME_DB}
+";
+
+	echo -e "${PROJECT_INFO_TXT}" > "${PDIR}/${PROJECT_DOMAIN}/${PROJECT_NAME}/PROJECT.txt";
+	[[ -f "${PDIR}/${PROJECT_DOMAIN}/${PROJECT_NAME}/PROJECT.txt" ]] && cat "${PDIR}/${PROJECT_DOMAIN}/${PROJECT_NAME}/PROJECT.txt";
+
+	PROJECT_INFO_HTML="
+<html>
+<body>
+<pre>
+Project name: <b> ${PROJECT_NAME}</b>
+Url:          http://${PROJECT_NAME}.${PROJECT_DOMAIN}
+Path:         ${PDIR}/${PROJECT_DOMAIN}/${PROJECT_NAME}
+Db host:      ${MYSQL_HOST}
+Db name:      ${PROJECT_NAME_DB}
+Db user:      ${PROJECT_NAME_USER}
+Db pass:      ${PROJECT_PASS}
+Ruby:         ${PROJECT_RUBY_VERSION}
+Gemset:       ${PROJECT_NAME_DB}
+</pre>
+</body>
+</html>
+	";
+
+	echo -e "${PROJECT_INFO_HTML}" > "${PDIR}/${PROJECT_DOMAIN}/${PROJECT_NAME}/index.html";
+
+	PROJECT_INFO_MAIL="
+project name: ${PROJECT_NAME}
+url: http://${PROJECT_NAME}.${PROJECT_DOMAIN}
+path: ${PDIR}/${PROJECT_DOMAIN}/${PROJECT_NAME}
+db host: ${MYSQL_HOST}
+db name: ${PROJECT_NAME_DB}
+db user: ${PROJECT_NAME_USER}
+db pass: ${PROJECT_PASS}
+ruby: ${PROJECT_RUBY_VERSION}
+gemset: ${PROJECT_NAME_DB}
+hostname: red.on.logicims.com
+";
+echo -e "$PROJECT_INFO_MAIL" | mail -s "New project: ${PROJECT_NAME}.${PROJECT_DOMAIN}" ${MAIL_REPORT}
+
+}
+
+function show_help()
+{
+  echo -e "${bldylw}Usage: ${ME} [options] ${txtrst}\n";
+  echo -e "${bldwht}${APP_NAME} ${APP_VER}${txtrst}\n";
+  echo -e "${bldblu}Options:${txtrst}";
+  echo "  -h, --help                    This help";
+  echo "  -c, --create                  Create project";
+  echo "  -l, --list                    List projects";
+
+  [[ ${UID} -eq 0 ]] && echo "  -i, --install                 Install (only for root)";
+  echo ;
+  [[ ${UID} -eq 0 ]] && echo "  --dir <dir>                     Directory on local filesystem";
+  exit 0;
+}
+
+
+function create_project()
+{
+	sel_domain; 		# -> new_domain
+	new_project;
+	new_database_schema;
+	new_rvm_configuration;
+	report_project;
+	exit 0;
+}
+
+function list_projects()
+{
+	echo -e "\n${bldblu}Available projects:${txtrst}\n";
+
+	for domain in `ls "${PDIR}"`; do 
+		echo -e "${bldwht} * ${domain}${txtrst}";
+
+		for project in `ls "${PDIR}/${domain}"`; do 
+
+			echo "   - $project";
+		done
+		echo ;
+	done
+}
+
+
+
+if [ -z "${1}" ] ; then 
+  show_help; exit 1;
+fi
+
+TEMP=`getopt -o hcl --long help,create,list -n "${ME}" -- "$@"`
+if [ $? != 0 ] ; then echo "Terminating..." >&2 ; exit 1 ; fi
+eval set -- "$TEMP"
+
+while true; do
+  case "$1" in
+    -h | --help ) show_help; shift ;;
+    -c | --create ) create_project; shift ;;
+    -l | --list ) list_projects; shift ;;
+    -- ) shift; break ;;
+    * ) break ;;
+  esac
+done
+
