@@ -1,0 +1,29 @@
+#!/bin/bash
+
+#
+# script will install all dependencies
+#
+
+[[ ${UID} -ne 0 ]] && echo -e "\e[0;31mError: run program as root.\e[0m" && exit 1;
+
+if [ -f /etc/os-release ] ; then
+
+  grep "CentOS Linux 7" /etc/os-release > /dev/null
+  if [ $? -eq 0 ] ; then 
+    yum -y install curl dialog mysql mariadb-server
+    sudo systemctl start mariadb
+    mysqladmin -u root password 'root'
+    gpg --keyserver hkp://keys.gnupg.net --recv-keys 409B6B1796C275462A1703113804BB82D39DC0E3
+    \curl -sSL https://get.rvm.io | bash -s stable --ruby
+    if [ -f /etc/profile.d/rvm.sh ] ; then 
+      source /etc/profile.d/rvm.sh
+
+    fi
+  else
+    echo -e "\e[0;31mError: unsupported centos release.\e[0m";
+    exit 1;
+  fi
+ 
+else
+  echo -e "\e[0;31mError: Your operating system is not supported yet.\e[0m";
+fi
